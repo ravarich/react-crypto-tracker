@@ -1,23 +1,30 @@
 // src/components/CoinDetail.tsx
 import React, { useEffect, useState } from 'react';
+import {
+    LineChart,
+    Line,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    ResponsiveContainer
+} from 'recharts';
 
 // กำหนด Type สำหรับโครงสร้างข้อมูลของเหรียญที่ได้จาก API (Simplified)
-// CoinGecko API สำหรับรายละเอียดเหรียญจะส่งข้อมูลมาเยอะมาก เราจะเลือกเฉพาะที่จำเป็น
 interface CoinDetailData {
     id: string;
     symbol: string;
     name: string;
     description: {
-        en: string; // คำอธิบายเป็นภาษาอังกฤษ
+        en: string;
     };
     image: {
-        large: string; // URL รูปภาพขนาดใหญ่
+        large: string;
     };
     market_cap_rank: number;
     market_data: {
         current_price: {
             usd: number;
-            thb: number; // ถ้าอยากได้ราคา THB ด้วย
         };
         high_24h: {
             usd: number;
@@ -48,64 +55,92 @@ interface CoinDetailData {
     };
 }
 
-// กำหนด Type สำหรับ Props ของ CoinDetail Component
-interface CoinDetailProps {
-    coinId: string | null; // ID ของเหรียญที่ถูกเลือก (เช่น 'bitcoin', 'ethereum')
-    onBackToList: () => void; // ฟังก์ชันสำหรับกลับไปหน้าหลัก
+// กำหนด Type สำหรับข้อมูลราคาประวัติศาสตร์ (สำหรับกราฟ)
+interface ChartData {
+    timestamp: number; // Unix timestamp
+    price: number;
+    date: string; // วันที่ในรูปแบบที่อ่านง่าย
 }
 
-const CoinDetail: React.FC<CoinDetailProps> = ({ coinId, onBackToList }) => {
-    // State สำหรับเก็บข้อมูลรายละเอียดเหรียญ
-    const [coinData, setCoinData] = useState<CoinDetailData | null>(null);
-    // State สำหรับจัดการสถานะการโหลดข้อมูล
-    const [isLoading, setIsLoading] = useState<boolean>(true);
-    // State สำหรับจัดการข้อผิดพลาด (ถ้ามี)
-    const [error, setError] = useState<string | null>(null);
+// กำหนด Type สำหรับ Props ของ CoinDetail Component
+interface CoinDetailProps {
+    coinId: string | null;
+    onBackToList: () => void;
+    currentTheme: 'light' | 'dark'; // รับ prop ธีมเข้ามา
+}
 
-    // useEffect Hook สำหรับดึงข้อมูลรายละเอียดเหรียญเมื่อ coinId เปลี่ยนแปลง
+const CoinDetail: React.FC<CoinDetailProps> = ({ coinId, onBackToList, currentTheme }) => {
+    const [coinData, setCoinData] = useState<CoinDetailData | null>(null);
+    const [chartData, setChartData] = useState<ChartData[]>([]);
+    const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [error, setError] = useState<string | null>(null);
+    const [days, setDays] = useState<string>('7'); // State สำหรับเลือกช่วงเวลาของกราฟ (เริ่มต้น 7 วัน)
+
+    // Effect Hook สำหรับดึงข้อมูลรายละเอียดเหรียญและข้อมูลกราฟ
     useEffect(() => {
-        // หากไม่มี coinId ให้หยุดการทำงาน (กรณีกลับมาจากหน้ารายละเอียด)
+        // ถ้าไม่มี coinId ให้หยุดการทำงานและรีเซ็ตสถานะ
         if (!coinId) {
             setIsLoading(false);
             setCoinData(null);
+            setChartData([]);
             return;
         }
 
-        const fetchCoinDetails = async () => {
+        const fetchDetailsAndChart = async () => {
             try {
                 setIsLoading(true); // ตั้งค่าสถานะการโหลดเป็น true
                 setError(null);    // ล้างข้อผิดพลาดเก่า
-                setCoinData(null); // ล้างข้อมูลเก่า (ป้องกันการแสดงข้อมูลผิดเหรียญชั่วคราว)
+                setCoinData(null); // ล้างข้อมูลเหรียญเก่า
+                setChartData([]);  // ล้างข้อมูลกราฟเก่า
 
-                // URL สำหรับ CoinGecko API เพื่อดึงรายละเอียดของเหรียญแต่ละเหรียญ
-                // ids: กำหนด ID ของเหรียญ
-                // localization=false: ไม่ต้องการข้อมูลที่แปลเป็นภาษาท้องถิ่น
-                // tickers=false: ไม่ต้องการข้อมูล Exchange
-                // community_data=false: ไม่ต้องการข้อมูลจากชุมชน
-                // developer_data=false: ไม่ต้องการข้อมูลจากนักพัฒนา
-                // sparkline=true: ต้องการข้อมูลกราฟย่อ (สำหรับกราฟราคา)
-                const API_URL = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=true`;
-
-                const response = await fetch(API_URL);
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                // --- Fetch Coin Details ---
+                const detailApiUrl = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`;
+                const detailResponse = await fetch(detailApiUrl);
+                if (!detailResponse.ok) {
+                    throw new Error(`HTTP error! status: ${detailResponse.status} for coin details.`);
                 }
+                const detailData: CoinDetailData = await detailResponse.json();
+                setCoinData(detailData);
 
-                const data: CoinDetailData = await response.json();
-                setCoinData(data); // เก็บข้อมูลรายละเอียดเหรียญลงใน state
+                // --- Fetch Chart Data ---
+                const chartApiUrl = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}`;
+                const chartResponse = await fetch(chartApiUrl);
+                if (!chartResponse.ok) {
+                    throw new Error(`HTTP error! status: ${chartResponse.status} for chart data.`);
+                }
+                const chartRawData = await chartResponse.json();
+
+                // แปลงข้อมูลกราฟให้อยู่ในรูปแบบที่ Recharts ต้องการ
+                const formattedChartData: ChartData[] = chartRawData.prices.map((item: [number, number]) => ({
+                    timestamp: item[0],
+                    price: item[1],
+                    date: new Date(item[0]).toLocaleDateString('en-GB'), // ใช้ 'en-GB' เพื่อให้ได้รูปแบบ DD/MM/YYYY
+                }));
+                setChartData(formattedChartData);
+
             } catch (err: any) {
-                console.error(`Failed to fetch details for ${coinId}:`, err);
-                setError(err.message || "Failed to load coin details.");
+                console.error(`Failed to fetch data for ${coinId}:`, err);
+                setError(err.message || "Failed to load coin details or chart data.");
             } finally {
-                setIsLoading(false); // ไม่ว่าจะสำเร็จหรือล้มเหลว ก็หยุดสถานะการโหลด
+                setIsLoading(false); // หยุดสถานะการโหลด ไม่ว่าจะสำเร็จหรือล้มเหลว
             }
         };
 
-        fetchCoinDetails(); // เรียกใช้ฟังก์ชันดึงข้อมูลเมื่อ coinId มีค่า
-    }, [coinId]); // Dependency array: Effect นี้จะทำงานใหม่เมื่อค่า 'coinId' เปลี่ยนแปลง
+        fetchDetailsAndChart(); // เรียกใช้ฟังก์ชันดึงข้อมูลเมื่อ coinId หรือ days มีการเปลี่ยนแปลง
+    }, [coinId, days]); // Dependency array: Effect นี้จะรันใหม่เมื่อ 'coinId' หรือ 'days' เปลี่ยน
 
-    // แสดงสถานะการโหลด
+    // Helper function เพื่อ Render HTML จาก Description
+    // ***คำเตือน***: การใช้ dangerouslySetInnerHTML อาจมีความเสี่ยง XSS หากเนื้อหาไม่น่าเชื่อถือ
+    // สำหรับ CoinGecko API ถือว่าปลอดภัยในระดับหนึ่ง
+    const renderDescription = (html: string) => {
+        // ลบลิงก์ออกจาก description เพื่อป้องกันการนำทางภายนอกที่ไม่ตั้งใจ
+        // นี่เป็น regex ง่ายๆ และอาจไม่ครอบคลุมทุกกรณี
+        const sanitizedHtml = html.replace(/<a[^>]*>(.*?)<\/a>/g, '$1');
+        return { __html: sanitizedHtml };
+    };
+
+    // --- การแสดงผล UI ตามสถานะการโหลด/ข้อผิดพลาด/ข้อมูล ---
+
     if (isLoading) {
         return (
             <div className="flex justify-center items-center h-64 bg-white dark:bg-gray-800 rounded-lg shadow-xl">
@@ -118,7 +153,6 @@ const CoinDetail: React.FC<CoinDetailProps> = ({ coinId, onBackToList }) => {
         );
     }
 
-    // แสดงข้อผิดพลาด
     if (error) {
         return (
             <div className="flex flex-col justify-center items-center h-64 bg-red-100 dark:bg-red-900 rounded-lg shadow-xl text-red-700 dark:text-red-200 p-4">
@@ -134,7 +168,7 @@ const CoinDetail: React.FC<CoinDetailProps> = ({ coinId, onBackToList }) => {
         );
     }
 
-    // หากไม่มีข้อมูลเหรียญหลังจากโหลด (อาจเกิดจาก coinId ไม่ถูกต้องหรือ API ไม่พบ)
+    // หากไม่มีข้อมูลเหรียญหลังจากโหลด (เช่น coinId ไม่ถูกต้องหรือ API ไม่พบข้อมูล)
     if (!coinData) {
         return (
             <div className="text-center p-8 bg-white dark:bg-gray-800 rounded-lg shadow-xl text-gray-700 dark:text-gray-300">
@@ -148,16 +182,6 @@ const CoinDetail: React.FC<CoinDetailProps> = ({ coinId, onBackToList }) => {
             </div>
         );
     }
-
-    // Helper function to render HTML from description (CoinGecko returns HTML)
-    // !!! WARNING: Using dangerouslySetInnerHTML can expose your site to XSS attacks
-    // !!! if the content is not trusted. For CoinGecko API, it's generally safe.
-    const renderDescription = (html: string) => {
-        // Remove links from description to prevent external navigation issues
-        // This is a simple regex and might not cover all cases.
-        const sanitizedHtml = html.replace(/<a[^>]*>(.*?)<\/a>/g, '$1');
-        return { __html: sanitizedHtml };
-    };
 
     return (
         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl">
@@ -184,9 +208,9 @@ const CoinDetail: React.FC<CoinDetailProps> = ({ coinId, onBackToList }) => {
             </button>
 
             {/* Header ของรายละเอียดเหรียญ */}
-            <div className="flex items-center mb-4">
+            <div className="flex flex-col sm:flex-row items-center mb-4">
                 {coinData.image.large && (
-                    <img src={coinData.image.large} alt={coinData.name} className="w-16 h-16 mr-4 rounded-full" />
+                    <img src={coinData.image.large} alt={coinData.name} className="w-16 h-16 mr-4 mb-4 sm:mb-0 rounded-full" />
                 )}
                 <div>
                     <h2 className="text-4xl font-bold text-gray-800 dark:text-white">
@@ -221,18 +245,79 @@ const CoinDetail: React.FC<CoinDetailProps> = ({ coinId, onBackToList }) => {
                         <li>
                             <span className="font-medium">All-Time High (ATH):</span> $
                             {coinData.market_data.ath.usd.toLocaleString()} (
-                            {new Date(coinData.market_data.ath_date.usd).toLocaleDateString()})
+                            {new Date(coinData.market_data.ath_date.usd).toLocaleDateString('en-GB')})
                         </li>
                     </ul>
                 </div>
             </div>
 
-            {/* กราฟราคา (Placeholder) */}
+            {/* กราฟราคา */}
             <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg shadow-inner mb-8">
-                <h3 className="text-xl font-semibold mb-2 text-gray-800 dark:text-white">กราฟราคา (Placeholder)</h3>
-                <div className="h-64 bg-gray-200 dark:bg-gray-600 rounded-md flex items-center justify-center text-gray-500 dark:text-gray-400">
-                    กราฟของ {coinData.name} จะแสดงที่นี่ (เช่น Chart.js, Recharts)
+                <h3 className="text-xl font-semibold mb-2 text-gray-800 dark:text-white">กราฟราคา {coinData.name}</h3>
+
+                {/* ปุ่มเลือกช่วงเวลาของกราฟ */}
+                <div className="flex flex-wrap gap-2 mb-4">
+                    {['1', '7', '30', '90', '180', '365', 'max'].map((d) => (
+                        <button
+                            key={d}
+                            onClick={() => setDays(d)}
+                            className={`px-4 py-2 rounded-full text-sm font-medium ${days === d
+                                    ? 'bg-indigo-600 text-white'
+                                    : 'bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                                } transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                        >
+                            {d === '1' ? '24h' : d === 'max' ? 'Max' : `${d}D`}
+                        </button>
+                    ))}
                 </div>
+
+                {/* แสดงกราฟด้วย Recharts */}
+                {chartData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={400}>
+                        <LineChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={currentTheme === 'dark' ? '#4b5563' : '#e0e0e0'} />
+                            <XAxis
+                                dataKey="date"
+                                stroke={currentTheme === 'dark' ? '#d1d5db' : '#4b5563'}
+                                tickFormatter={(tick) => {
+                                    const date = new Date(tick);
+                                    if (days === '1') { // สำหรับ 24h ให้แสดงเวลา
+                                        return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+                                    }
+                                    // สำหรับช่วงอื่น ให้แสดงวันที่
+                                    return date.toLocaleDateString('en-GB');
+                                }}
+                            />
+                            <YAxis
+                                domain={['auto', 'auto']}
+                                stroke={currentTheme === 'dark' ? '#d1d5db' : '#4b5563'}
+                                tickFormatter={(tick) => `$${tick.toLocaleString()}`}
+                            />
+                            <Tooltip
+                                formatter={(value: number) => [`$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`, 'Price']}
+                                labelFormatter={(label) => `Date: ${label}`}
+                                contentStyle={{
+                                    backgroundColor: currentTheme === 'dark' ? '#374151' : '#ffffff',
+                                    borderColor: currentTheme === 'dark' ? '#4b5563' : '#e5e7eb',
+                                    color: currentTheme === 'dark' ? '#f3f4f6' : '#1f2937'
+                                }}
+                                labelStyle={{ color: currentTheme === 'dark' ? '#9ca3af' : '#6b7280' }}
+                            />
+                            <Line
+                                type="monotone"
+                                dataKey="price"
+                                stroke="#8884d8" // สีเส้นกราฟหลัก
+                                strokeWidth={2}
+                                dot={false}
+                                activeDot={{ r: 8 }}
+                            />
+                        </LineChart>
+                    </ResponsiveContainer>
+                ) : (
+                    <div className="h-64 flex items-center justify-center text-gray-500 dark:text-gray-400">
+                        ไม่มีข้อมูลกราฟสำหรับช่วงเวลาที่เลือก
+                    </div>
+                )}
             </div>
 
             {/* คำอธิบายเหรียญ */}
@@ -241,8 +326,6 @@ const CoinDetail: React.FC<CoinDetailProps> = ({ coinId, onBackToList }) => {
                 {coinData.description.en ? (
                     <p
                         className="text-gray-700 dark:text-gray-300 leading-relaxed description-text"
-                        // CoinGecko ส่ง HTML มาใน description จึงต้องใช้ dangerouslySetInnerHTML
-                        // WARNING: ใช้ด้วยความระมัดระวังและเฉพาะกับเนื้อหาที่เชื่อถือได้เท่านั้น
                         dangerouslySetInnerHTML={renderDescription(coinData.description.en)}
                     ></p>
                 ) : (
@@ -287,7 +370,6 @@ const CoinDetail: React.FC<CoinDetailProps> = ({ coinId, onBackToList }) => {
                             Twitter
                         </a>
                     )}
-                    {/* เพิ่มลิงก์อื่นๆ ได้ตามต้องการ */}
                 </div>
             </div>
         </div>
